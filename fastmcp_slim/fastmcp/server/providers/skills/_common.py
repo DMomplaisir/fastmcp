@@ -74,6 +74,22 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     return frontmatter, remaining
 
 
+class SkillPathError(ValueError):
+    """A skill path resolves outside the directory that contains it."""
+
+
+def resolve_within(base: Path, relative: str | Path) -> Path:
+    """Resolve `relative` under `base`, rejecting paths that escape `base`.
+
+    `base` must already be resolved. It is not resolved again, so replacing it
+    with a link after it was selected cannot move the containment boundary.
+    """
+    path = (base / relative).resolve()
+    if not path.is_relative_to(base):
+        raise SkillPathError(f"Path {relative} escapes {base}")
+    return path
+
+
 def compute_file_hash(path: Path) -> str:
     """Compute SHA256 hash of a file."""
     sha256 = hashlib.sha256()
