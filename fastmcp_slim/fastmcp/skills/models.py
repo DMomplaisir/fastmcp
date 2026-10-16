@@ -148,6 +148,7 @@ class Skill(BaseModel):
     uri: str
     frontmatter: SkillFrontmatter
     resources: list[SkillResource] | Literal["dynamic"]
+    meta: dict[str, JsonValue] | None = Field(default=None, alias="_meta")
 
     @model_validator(mode="after")
     def validate_entry(self) -> Skill:

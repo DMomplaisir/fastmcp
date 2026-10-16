@@ -249,3 +249,11 @@ def test_get_result_uses_protocol_cache_fields() -> None:
     assert wire["resultType"] == "complete"
     assert wire["ttlMs"] == 0
     assert wire["cacheScope"] == "private"
+
+
+def test_skill_preserves_protocol_metadata() -> None:
+    metadata = {"io.modelcontextprotocol.skills/example": {"revision": 3}}
+    skill = make_skill(_meta=metadata)
+    assert skill.meta == metadata
+    assert skill.model_dump(by_alias=True)["_meta"] == metadata
+    assert make_skill().meta is None
