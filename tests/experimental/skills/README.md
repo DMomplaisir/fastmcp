@@ -1,11 +1,15 @@
 # Experimental Skills validation
 
 This experiment targets the stable Skills extension at
-`modelcontextprotocol/ext-skills@167da6c` and builds on FastMCP PR #5057.
+`modelcontextprotocol/ext-skills@e083f6d` and builds on FastMCP PR #5057.
 It opts the existing `SkillsDirectoryProvider` into filesystem publication and
 standard discovery through `experimental_skills=True` and the single
 `SkillsExtension`. It does not implement
 host activation or the optional directory-read method.
+
+The October 16 review includes the upstream schema correction adding optional
+`_meta` to skill entries. The additional directory-read cache requirements do not
+apply because this implementation does not advertise directory reads.
 
 The upstream conformance runner at
 `modelcontextprotocol/conformance@c37eec888e1c6ff140af79987a40008548b7cc5f`
