@@ -185,7 +185,7 @@ Establish intended behavior from the protocol, docs, history, and maintainer dec
 
 ### Configuration-caused reports
 
-For issues, PRs, and security reports alike, name the default experience and check whether it already works. When the problem appears only because of a non-default configuration or an unusual composition the reporter chose, and the proposed change is not a strict improvement for default users, classify it as a configuration or documentation issue. Fix the docs or close it; do not add mechanism, options, or special cases to satisfy one idiosyncratic setup.
+For issues, PRs, and security reports alike, name the default experience and check whether it already works. When the problem appears only because of a non-default configuration or an unusual composition the reporter chose, and the proposed change is not a strict improvement for default users, classify it as a configuration or documentation issue: fix the docs or close it, and do not add mechanism, options, or special cases to satisfy one idiosyncratic setup. This does not excuse a supported option that breaks its own documented promise; that is still FastMCP's bug, whether or not it is the default.
 
 ### Framework regressions and root causes
 
