@@ -13,8 +13,8 @@ from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 from fastmcp.server.extensions import MethodBinding, ServerExtension
 from fastmcp.server.mixins.mcp_operations import _apply_pagination
 from fastmcp.server.providers.base import Provider
+from fastmcp.skills._composition import _AggregateSkills, _ServerSkills
 from fastmcp.skills._constants import SKILLS_EXTENSION_ID
-from fastmcp.skills._providers import _AggregateSkills, _ServerSkills
 from fastmcp.skills._source import _SkillSource
 from fastmcp.skills.models import (
     GetSkillParams,

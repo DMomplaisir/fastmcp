@@ -50,7 +50,7 @@ class _WrappedProvider(Provider):
         self._transforms.append(transform)
 
     def _get_skills_source(self) -> _SkillSource | None:
-        from fastmcp.skills._providers import _transformed
+        from fastmcp.skills._composition import _transformed
 
         source = self._inner._get_skills_source()
         return _transformed(source, self) if source is not None else None

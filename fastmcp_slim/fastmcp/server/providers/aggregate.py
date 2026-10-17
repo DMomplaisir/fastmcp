@@ -100,7 +100,7 @@ class AggregateProvider(Provider):
         self._extension_scopes: list[_ExtensionScope] = []
 
     def _get_skills_source(self) -> _SkillSource | None:
-        from fastmcp.skills._providers import _AggregateSkills, _transformed
+        from fastmcp.skills._composition import _AggregateSkills, _transformed
 
         sources = [
             source

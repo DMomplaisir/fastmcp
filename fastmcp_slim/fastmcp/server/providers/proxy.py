@@ -909,7 +909,7 @@ class ProxyProvider(Provider):
         self._prompts_cache: _CacheEntry[Prompt] | None = None
 
     def _get_skills_source(self) -> _SkillSource:
-        from fastmcp.skills._proxy import _ProxySkillSource
+        from fastmcp.server.providers.skills._proxy import _ProxySkillSource
 
         return _ProxySkillSource(self)
 

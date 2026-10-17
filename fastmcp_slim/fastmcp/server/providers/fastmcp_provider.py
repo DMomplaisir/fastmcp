@@ -416,7 +416,7 @@ class FastMCPProvider(Provider):
         self.server = server
 
     def _get_skills_source(self) -> _SkillSource | None:
-        from fastmcp.skills._providers import _ServerSkills, _transformed
+        from fastmcp.skills._composition import _ServerSkills, _transformed
 
         source = self.server._get_skills_source()
         if source is None:
