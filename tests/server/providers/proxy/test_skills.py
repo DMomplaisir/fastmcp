@@ -36,10 +36,10 @@ def backend(root: Path, *names: str, page_size: int | None = None) -> FastMCP:
     for name in names:
         directory = root / name
         directory.mkdir(parents=True)
-        (directory / "SKILL.md").write_text(
-            f"---\nname: {name}\ndescription: Use {name}.\n---\n\n# {name}\n"
+        (directory / "SKILL.md").write_bytes(
+            f"---\nname: {name}\ndescription: Use {name}.\n---\n\n# {name}\n".encode()
         )
-        (directory / "guide.txt").write_text("Supporting instructions\n")
+        (directory / "guide.txt").write_bytes(b"Supporting instructions\n")
     provider = SkillsDirectoryProvider(root, experimental_skills=True)
     server = FastMCP("upstream", providers=[provider], list_page_size=page_size)
     server.add_extension(SkillsExtension(providers=[provider]))
@@ -288,7 +288,7 @@ async def test_refreshed_manifest_is_not_paired_with_cached_old_bytes(
     async with skills_client(proxy) as client:
         await client.get_skill("skill://review/SKILL.md")
         assert (await client.read_resource(uri))[0].text == "Supporting instructions\n"
-        (tmp_path / "review" / "guide.txt").write_text("New content\n")
+        (tmp_path / "review" / "guide.txt").write_bytes(b"New content\n")
         skill = await client.get_skill("skill://review/SKILL.md")
         result = await client.read_resource(uri)
         content = result[0].text.encode()
