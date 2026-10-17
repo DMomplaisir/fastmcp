@@ -73,7 +73,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fastmcp.client.transports import ClientTransport
-    from fastmcp.skills._proxy import _ProxySkillSource
     from fastmcp.skills._source import _SkillSource
 
 logger = get_logger(__name__)
@@ -908,14 +907,11 @@ class ProxyProvider(Provider):
         self._resources_cache: _CacheEntry[Resource] | None = None
         self._templates_cache: _CacheEntry[ResourceTemplate] | None = None
         self._prompts_cache: _CacheEntry[Prompt] | None = None
-        self._skills_source: _ProxySkillSource | None = None
 
     def _get_skills_source(self) -> _SkillSource:
         from fastmcp.skills._proxy import _ProxySkillSource
 
-        if self._skills_source is None:
-            self._skills_source = _ProxySkillSource(self)
-        return self._skills_source
+        return _ProxySkillSource(self)
 
     async def _get_client(self) -> Client:
         """Gets a client instance by calling the sync or async factory."""
@@ -1175,6 +1171,52 @@ class _UpstreamServerMetadata:
         return cls.from_result(result, server_info)
 
 
+async def _read_connected_metadata(client: Client) -> _UpstreamServerMetadata | None:
+    """Read metadata without changing the client's adopted negotiation state."""
+    if client.mode in MODERN_PROTOCOL_VERSIONS and client.prior_discover is None:
+        # An exact pin adopts a synthetic result without probing. Read the
+        # real result directly, but do not adopt it into this borrowed session.
+        raw = await client.session.send_discover(client.mode)
+        result_type = raw.get("resultType")
+        if (
+            isinstance(result_type, str)
+            and result_type not in mcp_types.CORE_RESULT_TYPES
+        ):
+            return None
+        try:
+            result = mcp_types.DiscoverResult.model_validate(raw)
+        except ValidationError as error:
+            logger.debug("Could not read upstream server metadata: %r", error)
+            return None
+        return _UpstreamServerMetadata.from_discover(result)
+    return _UpstreamServerMetadata.from_client(client)
+
+
+async def _read_upstream_metadata(
+    provider: ProxyProvider, client: Client, context: Context | None
+) -> _UpstreamServerMetadata | None:
+    key = f"_fastmcp_proxy_metadata:{id(provider)}"
+    if context is not None:
+        if key in context._request_state:
+            return cast(_UpstreamServerMetadata | None, context._request_state[key])
+        _stash_proxy_request_context(client, context)
+
+    try:
+        if client.is_connected():
+            result = await _read_connected_metadata(client)
+        else:
+            async with client:
+                result = await _read_connected_metadata(client)
+    except (MCPError, *_PROXY_TRANSPORT_ERRORS) as error:
+        if isinstance(error, RuntimeError) and not _has_transport_cause(error):
+            raise
+        logger.debug("Could not read upstream server metadata: %r", error)
+        result = None
+    if context is not None:
+        context._request_state[key] = result
+    return result
+
+
 class ProxyMetadataMiddleware(Middleware):
     """Forward optional server metadata from a ``ProxyProvider`` backend.
 
@@ -1194,50 +1236,6 @@ class ProxyMetadataMiddleware(Middleware):
             raise ValueError("identity must be 'proxy' or 'upstream'")
         self.provider = provider
         self.identity = identity
-
-    async def _read_connected(self, client: Client) -> _UpstreamServerMetadata | None:
-        """Read metadata without changing the client's adopted negotiation state."""
-        if client.mode in MODERN_PROTOCOL_VERSIONS and client.prior_discover is None:
-            # An exact pin adopts a synthetic result without probing. Read the
-            # real result directly, but do not adopt it into this borrowed session.
-            raw = await client.session.send_discover(client.mode)
-            result_type = raw.get("resultType")
-            if (
-                isinstance(result_type, str)
-                and result_type not in mcp_types.CORE_RESULT_TYPES
-            ):
-                return None
-            try:
-                result = mcp_types.DiscoverResult.model_validate(raw)
-            except ValidationError as error:
-                logger.debug("Could not read upstream server metadata: %r", error)
-                return None
-            return _UpstreamServerMetadata.from_discover(result)
-        return _UpstreamServerMetadata.from_client(client)
-
-    async def _read_upstream(
-        self, client: Client, context: Context | None
-    ) -> _UpstreamServerMetadata | None:
-        key = f"_fastmcp_proxy_metadata:{id(self.provider)}"
-        if context is not None:
-            if key in context._request_state:
-                return cast(_UpstreamServerMetadata | None, context._request_state[key])
-            _stash_proxy_request_context(client, context)
-
-        try:
-            if client.is_connected():
-                result = await self._read_connected(client)
-            else:
-                async with client:
-                    result = await self._read_connected(client)
-        except (MCPError, *_PROXY_TRANSPORT_ERRORS) as error:
-            if isinstance(error, RuntimeError) and not _has_transport_cause(error):
-                raise
-            logger.debug("Could not read upstream server metadata: %r", error)
-            result = None
-        if context is not None:
-            context._request_state[key] = result
-        return result
 
     def _updates(
         self,
@@ -1272,7 +1270,9 @@ class ProxyMetadataMiddleware(Middleware):
         result = await call_next(context)
         if result is None:
             return None
-        upstream = await self._read_upstream(client, context.fastmcp_context)
+        upstream = await _read_upstream_metadata(
+            self.provider, client, context.fastmcp_context
+        )
         if upstream is None:
             return result
         return result.model_copy(update=self._updates(result, upstream))
@@ -1289,7 +1289,9 @@ class ProxyMetadataMiddleware(Middleware):
         if not isinstance(result, mcp_types.DiscoverResult):
             return result
         client = await self.provider._get_client()
-        upstream = await self._read_upstream(client, context.fastmcp_context)
+        upstream = await _read_upstream_metadata(
+            self.provider, client, context.fastmcp_context
+        )
         if upstream is None:
             return result
         return result.model_copy(update=self._updates(result, upstream))

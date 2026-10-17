@@ -65,30 +65,18 @@ class MemorySkillProvider(Provider, _SkillSource):
         }
         self.contexts: list[ServerRequestContext[Any, Any]] = []
 
-    def _validate_skill_source(self) -> None:
-        pass
-
-    async def _skill_uris(self, uri: str | None = None) -> Sequence[str]:
-        return [key for key in self.addressable if uri is None or key == uri]
-
-    def _owns_skill_resource(self, uri: str) -> bool:
-        return False
-
     async def _list_skill_entries(
         self, context: ServerRequestContext[Any, Any]
     ) -> _Catalog:
         self.contexts.append(context)
-        return _Catalog(ListSkillsResult(skills=self.listed), tuple(self.addressable))
+        return _Catalog(self.listed, tuple(self.addressable))
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
     ) -> _Lookup:
         self.contexts.append(context)
         skill = self.addressable.get(uri)
-        return _Lookup(
-            matches=int(skill is not None),
-            result=GetSkillResult(skill=skill) if skill is not None else None,
-        )
+        return _Lookup(matches=int(skill is not None), skill=skill)
 
     async def _get_resource(
         self, uri: str, version: VersionSpec | None = None

@@ -8,23 +8,23 @@ from typing import Any
 
 from mcp.server.context import ServerRequestContext
 
-from fastmcp.skills.models import GetSkillResult, ListSkillsResult
+from fastmcp.skills.models import Skill
 
 
 @dataclass(frozen=True)
 class _Catalog:
-    result: ListSkillsResult
+    skills: list[Skill]
     identities: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class _Lookup:
     matches: int = 0
-    result: GetSkillResult | None = None
+    skill: Skill | None = None
 
 
 class _SkillSource(ABC):
-    """Keep identity before authorization alongside the typed protocol result."""
+    """Keep identity before authorization alongside the visible skills."""
 
     async def _is_supported(self, context: ServerRequestContext[Any, Any]) -> bool:
         return True
@@ -45,3 +45,9 @@ class _SkillSource(ABC):
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
     ) -> _Lookup: ...
+
+
+def _manifest_uris(skill: Skill) -> list[str]:
+    if isinstance(skill.resources, list):
+        return [resource.uri for resource in skill.resources]
+    return [skill.uri]

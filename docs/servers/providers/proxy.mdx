@@ -347,7 +347,7 @@ if __name__ == "__main__":
 
 Mounted namespaces apply consistently to the skill and its manifest's resource URIs. Skill files continue through the existing resource proxy and are read only when requested. Resource permissions hide a skill if the caller is denied any of its files.
 
-Forwarded results retain backend cache durations and application metadata, with private cache scope because proxy permissions can depend on the caller. Catalogs combined from multiple backends use the server's default private, zero-duration cache policy. After a manifest refresh, its files bypass `ResponseCachingMiddleware` for the provider's metadata-cache lifetime, so refreshed metadata can be paired with current bytes.
+Like other proxied lists, Skills results use the proxy's own private, zero-duration cache policy rather than the backend's, because proxy permissions can depend on the caller. Proxied `skill://` resources bypass `ResponseCachingMiddleware`, so refreshed skill metadata is always paired with current file bytes.
 
 ## Mirrored Components
 

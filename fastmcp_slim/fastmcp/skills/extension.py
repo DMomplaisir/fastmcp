@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -27,67 +26,13 @@ from fastmcp.skills.models import (
 if TYPE_CHECKING:
     from fastmcp.server.server import FastMCP
 
+_SKILLS_METHOD_VERSIONS = frozenset(MODERN_PROTOCOL_VERSIONS)
 
-class _SkillsExtension(ServerExtension, ABC):
+
+class SkillsExtension(ServerExtension):
+    """Expose caller-scoped and proxied skill sources through SEP-2640 methods."""
+
     identifier = SKILLS_EXTENSION_ID
-
-    @property
-    @abstractmethod
-    def _source(self) -> _SkillSource | None: ...
-
-    def requires_live_resource(self, uri: str) -> bool:
-        """Keep manifest-backed resources coherent with current file bytes."""
-        source = self._source
-        return source is not None and source._owns_skill_resource(uri)
-
-    def methods(self) -> Sequence[MethodBinding]:
-        return (
-            MethodBinding(
-                method="skills/list",
-                params_type=ListSkillsParams,
-                handler=self._handle_list,
-                protocol_versions=frozenset(MODERN_PROTOCOL_VERSIONS),
-            ),
-            MethodBinding(
-                method="skills/get",
-                params_type=GetSkillParams,
-                handler=self._handle_get,
-                protocol_versions=frozenset(MODERN_PROTOCOL_VERSIONS),
-            ),
-        )
-
-    def _require_source(self) -> _SkillSource:
-        source = self._source
-        if source is None:
-            raise MCPError(code=METHOD_NOT_FOUND, message="Skills are not supported")
-        return source
-
-    async def _handle_list(
-        self, context: ServerRequestContext[Any, Any], params: ListSkillsParams
-    ) -> ListSkillsResult:
-        catalog = await self._require_source()._list_skill_entries(context)
-        page, cursor = _apply_pagination(
-            catalog.result.skills, params.cursor, self.server._list_page_size
-        )
-        return catalog.result.model_copy(update={"skills": page, "next_cursor": cursor})
-
-    async def _handle_get(
-        self, context: ServerRequestContext[Any, Any], params: GetSkillParams
-    ) -> GetSkillResult:
-        lookup = await self._require_source()._get_skill_entry(params.uri, context)
-        if (
-            lookup.matches != 1
-            or lookup.result is None
-            or lookup.result.skill.uri != params.uri
-        ):
-            raise MCPError(
-                code=INVALID_PARAMS, message=f"Unknown skill URI: {params.uri}"
-            )
-        return lookup.result
-
-
-class SkillsExtension(_SkillsExtension):
-    """Publish directly registered skill providers alongside proxied skills."""
 
     def __init__(self, *, providers: Sequence[Provider]) -> None:
         if not providers:
@@ -127,24 +72,75 @@ class SkillsExtension(_SkillsExtension):
     @property
     def _source(self) -> _SkillSource | None:
         sources = list(self._validate_configuration(self.server))
-        proxy = self.server._get_skills_source()
-        if proxy is not None:
-            sources.append(proxy)
-        return _ServerSkills(
-            _AggregateSkills(
-                sources, error_strategy=self.server.provider_error_strategy
+        proxied = self.server._get_skills_source()
+        if proxied is not None:
+            sources.append(proxied)
+        if not sources:
+            return None
+        aggregate = _AggregateSkills(
+            sources, error_strategy=self.server.provider_error_strategy
+        )
+        return _ServerSkills(aggregate, self.server)
+
+    def _require_source(self) -> _SkillSource:
+        source = self._source
+        if source is None:
+            raise MCPError(code=METHOD_NOT_FOUND, message="Skills are not supported")
+        return source
+
+    def requires_live_resource(self, uri: str) -> bool:
+        """Keep manifest-backed resources coherent with current file bytes."""
+        source = self._source
+        return source is not None and source._owns_skill_resource(uri)
+
+    def methods(self) -> Sequence[MethodBinding]:
+        return (
+            MethodBinding(
+                method="skills/list",
+                params_type=ListSkillsParams,
+                handler=self._handle_list,
+                protocol_versions=_SKILLS_METHOD_VERSIONS,
             ),
-            self.server,
+            MethodBinding(
+                method="skills/get",
+                params_type=GetSkillParams,
+                handler=self._handle_get,
+                protocol_versions=_SKILLS_METHOD_VERSIONS,
+            ),
         )
 
+    async def _handle_list(
+        self, context: ServerRequestContext[Any, Any], params: ListSkillsParams
+    ) -> ListSkillsResult:
+        catalog = await self._require_source()._list_skill_entries(context)
+        page, next_cursor = _apply_pagination(
+            catalog.skills, params.cursor, self.server._list_page_size
+        )
+        return ListSkillsResult(skills=page, next_cursor=next_cursor)
 
-class _ProxySkillsExtension(_SkillsExtension):
-    """Optional forwarding handlers installed before a server starts serving."""
+    async def _handle_get(
+        self, context: ServerRequestContext[Any, Any], params: GetSkillParams
+    ) -> GetSkillResult:
+        lookup = await self._require_source()._get_skill_entry(params.uri, context)
+        if (
+            lookup.matches != 1
+            or lookup.skill is None
+            or lookup.skill.uri != params.uri
+        ):
+            raise MCPError(
+                code=INVALID_PARAMS, message=f"Unknown skill URI: {params.uri}"
+            )
+        return GetSkillResult(skill=lookup.skill)
 
-    @property
-    def _source(self) -> _SkillSource | None:
-        source = self.server._get_skills_source()
-        return _ServerSkills(source, self.server) if source is not None else None
+
+class _ProxySkillsExtension(SkillsExtension):
+    """Installed on every server; advertised only when a proxied backend has Skills."""
+
+    def __init__(self) -> None:
+        self._providers = ()
+
+    def _validate_configuration(self, server: FastMCP) -> tuple[_SkillSource, ...]:
+        return ()
 
     async def _is_supported(self, context: ServerRequestContext[Any, Any]) -> bool:
         source = self._source

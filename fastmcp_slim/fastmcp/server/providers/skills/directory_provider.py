@@ -26,7 +26,7 @@ from fastmcp.server.providers.skills.skill_provider import (
 )
 from fastmcp.skills._snapshot import Snapshot, snapshot
 from fastmcp.skills._source import _Catalog, _Lookup, _SkillSource
-from fastmcp.skills.models import GetSkillResult, ListSkillsResult, Skill
+from fastmcp.skills.models import Skill
 from fastmcp.utilities.logging import get_logger
 from fastmcp.utilities.versions import VersionSpec
 
@@ -398,9 +398,7 @@ class SkillsDirectoryProvider(AggregateProvider, _SkillSource):
             entry = await self._visible_entry(snap)
             if entry is not None:
                 entries.append(entry)
-        return _Catalog(
-            ListSkillsResult(skills=entries), tuple(await self._skill_uris())
-        )
+        return _Catalog(entries, tuple(await self._skill_uris()))
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
@@ -417,10 +415,7 @@ class SkillsDirectoryProvider(AggregateProvider, _SkillSource):
         except (OSError, ValueError, yaml.YAMLError, RecursionError) as exc:
             logger.warning("Omitting invalid skill %s: %s", directories[0], exc)
             return _Lookup(matches=1)
-        entry = await self._visible_entry(snap)
-        return _Lookup(
-            matches=1, result=GetSkillResult(skill=entry) if entry is not None else None
-        )
+        return _Lookup(matches=1, skill=await self._visible_entry(snap))
 
     def _owns_skill_resource(self, uri: str) -> bool:
         parts = self._uri_parts(uri)
@@ -433,15 +428,7 @@ class SkillsDirectoryProvider(AggregateProvider, _SkillSource):
         if not self._experimental_skills:
             raise ValueError("Skills discovery requires experimental_skills=True")
 
-    async def _skill_uris(self, uri: str | None = None) -> Sequence[str]:
+    async def _skill_uris(self) -> list[str]:
         self._validate_skill_source()
-        if uri is None:
-            candidates = await run_sync(self._candidate_directories)
-            return [
-                f"skill://{quote(name, safe='/')}/SKILL.md" for name, _ in candidates
-            ]
-        parts = self._uri_parts(uri)
-        if parts is None or parts[-1] != "SKILL.md":
-            return []
-        directories = self._directories_for_name("/".join(parts[:-1]))
-        return [uri] * len(directories)
+        candidates = await run_sync(self._candidate_directories)
+        return [f"skill://{quote(name, safe='/')}/SKILL.md" for name, _ in candidates]

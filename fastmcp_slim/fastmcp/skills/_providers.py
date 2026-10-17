@@ -14,8 +14,8 @@ from mcp_types import METHOD_NOT_FOUND
 from fastmcp.exceptions import AuthorizationError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms import Namespace, Visibility
-from fastmcp.skills._source import _Catalog, _Lookup, _SkillSource
-from fastmcp.skills.models import ListSkillsResult, Skill
+from fastmcp.skills._source import _Catalog, _Lookup, _manifest_uris, _SkillSource
+from fastmcp.skills.models import Skill
 from fastmcp.utilities.async_utils import gather
 from fastmcp.utilities.logging import get_logger
 
@@ -83,23 +83,16 @@ class _AggregateSkills(_SkillSource):
             logger.warning(
                 "Omitting duplicate Skills entries for URIs: %s", ", ".join(collisions)
             )
-        entries = sorted(
+        skills = sorted(
             (
                 skill
                 for catalog in catalogs
-                for skill in catalog.result.skills
+                for skill in catalog.skills
                 if counts[skill.uri] == 1
             ),
             key=lambda skill: skill.uri,
         )
-        result = (
-            catalogs[0].result.model_copy(
-                update={"skills": entries, "next_cursor": None}
-            )
-            if len(self.sources) == 1 and catalogs
-            else ListSkillsResult(skills=entries)
-        )
-        return _Catalog(result, identities)
+        return _Catalog(skills, identities)
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
@@ -111,10 +104,10 @@ class _AggregateSkills(_SkillSource):
             )
         )
         matches = sum(lookup.matches for lookup in lookups)
-        result = next(
-            (lookup.result for lookup in lookups if lookup.result is not None), None
+        skill = next(
+            (lookup.skill for lookup in lookups if lookup.skill is not None), None
         )
-        return _Lookup(matches, result if matches == 1 else None)
+        return _Lookup(matches, skill if matches == 1 else None)
 
 
 class _TransformedSkills(_SkillSource):
@@ -153,12 +146,7 @@ class _TransformedSkills(_SkillSource):
     async def _visible(self, skill: Skill) -> bool:
         if not any(isinstance(t, Visibility) for t in self.provider.transforms):
             return True
-        uris = (
-            [resource.uri for resource in skill.resources]
-            if isinstance(skill.resources, list)
-            else [skill.uri]
-        )
-        for uri in uris:
+        for uri in _manifest_uris(skill):
             resource = await self.provider.get_resource(uri)
             if (
                 resource is None
@@ -178,15 +166,12 @@ class _TransformedSkills(_SkillSource):
         self, context: ServerRequestContext[Any, Any]
     ) -> _Catalog:
         catalog = await self.source._list_skill_entries(context)
-        entries = []
-        for entry in catalog.result.skills:
-            skill = self._skill(entry)
-            if await self._visible(skill):
-                entries.append(skill)
-        return _Catalog(
-            catalog.result.model_copy(update={"skills": entries}),
-            tuple(self._forward(uri) for uri in catalog.identities),
-        )
+        skills = [
+            skill
+            for skill in map(self._skill, catalog.skills)
+            if await self._visible(skill)
+        ]
+        return _Catalog(skills, tuple(self._forward(uri) for uri in catalog.identities))
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
@@ -195,15 +180,10 @@ class _TransformedSkills(_SkillSource):
         if original is None:
             return _Lookup()
         lookup = await self.source._get_skill_entry(original, context)
-        if lookup.result is None:
+        if lookup.skill is None:
             return lookup
-        skill = self._skill(lookup.result.skill)
-        result = (
-            lookup.result.model_copy(update={"skill": skill})
-            if await self._visible(skill)
-            else None
-        )
-        return replace(lookup, result=result)
+        skill = self._skill(lookup.skill)
+        return replace(lookup, skill=skill if await self._visible(skill) else None)
 
 
 class _ServerSkills(_SkillSource):
@@ -219,13 +199,8 @@ class _ServerSkills(_SkillSource):
         return self.source._owns_skill_resource(uri)
 
     async def _visible(self, skill: Skill) -> bool:
-        uris = (
-            [resource.uri for resource in skill.resources]
-            if isinstance(skill.resources, list)
-            else [skill.uri]
-        )
         try:
-            for uri in uris:
+            for uri in _manifest_uris(skill):
                 await self.server._check_resource_access(uri)
         except AuthorizationError:
             return False
@@ -236,26 +211,15 @@ class _ServerSkills(_SkillSource):
     ) -> _Catalog:
         async with Context(fastmcp=self.server):
             catalog = await self.source._list_skill_entries(context)
-            entries = [
-                skill for skill in catalog.result.skills if await self._visible(skill)
-            ]
-        return replace(
-            catalog,
-            result=catalog.result.model_copy(
-                update={"skills": entries, "cache_scope": "private"}
-            ),
-        )
+            skills = [skill for skill in catalog.skills if await self._visible(skill)]
+        return replace(catalog, skills=skills)
 
     async def _get_skill_entry(
         self, uri: str, context: ServerRequestContext[Any, Any]
     ) -> _Lookup:
         async with Context(fastmcp=self.server):
             lookup = await self.source._get_skill_entry(uri, context)
-            if lookup.result is None:
+            if lookup.skill is None:
                 return lookup
-            result = (
-                lookup.result.model_copy(update={"cache_scope": "private"})
-                if await self._visible(lookup.result.skill)
-                else None
-            )
-        return replace(lookup, result=result)
+            visible = await self._visible(lookup.skill)
+        return replace(lookup, skill=lookup.skill if visible else None)

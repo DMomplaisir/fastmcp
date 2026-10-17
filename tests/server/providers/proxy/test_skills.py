@@ -19,7 +19,6 @@ from fastmcp.server.providers.proxy import ProxyClient, ProxyProvider
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 from fastmcp.skills import SkillsClientExtension
 from fastmcp.skills._constants import SKILLS_EXTENSION_ID
-from fastmcp.skills._proxy import _ProxySkillSource
 from fastmcp.skills.extension import SkillsExtension
 from fastmcp.skills.models import GetSkillParams, GetSkillRequest, GetSkillResult
 
@@ -300,34 +299,20 @@ async def test_refreshed_manifest_is_not_paired_with_cached_old_bytes(
         assert entry.size == len(content)
 
 
-async def test_forwards_cache_hints_and_metadata_without_publicizing_catalog(
-    tmp_path: Path,
-) -> None:
-    class CacheHints(Middleware):
+async def test_backend_cache_hints_do_not_publicize_catalog(tmp_path: Path) -> None:
+    class PublicHints(Middleware):
         async def on_request(self, context, call_next):
             result = await call_next(context)
             if context.method in ("skills/list", "skills/get"):
-                return {
-                    **result,
-                    "ttlMs": 30_000,
-                    "cacheScope": "public",
-                    "_meta": {"com.example/catalog": "revision-one"},
-                }
+                return {**result, "ttlMs": 30_000, "cacheScope": "public"}
             return result
 
     upstream = backend(tmp_path, "review")
-    upstream.add_middleware(CacheHints())
+    upstream.add_middleware(PublicHints())
     async with skills_client(create_proxy(upstream)) as client:
         listed = await client.list_skills_mcp()
         fetched = await client.get_skill_mcp("skill://review/SKILL.md")
-        assert listed.ttl_ms == fetched.ttl_ms == 30_000
         assert listed.cache_scope == fetched.cache_scope == "private"
-        assert listed.meta is not None and fetched.meta is not None
-        assert (
-            listed.meta["com.example/catalog"]
-            == fetched.meta["com.example/catalog"]
-            == "revision-one"
-        )
 
 
 async def test_can_mount_ordinary_proxy_while_serving() -> None:
@@ -374,52 +359,6 @@ async def test_aggregate_uses_existing_provider_error_strategy(
         else:
             with pytest.raises(MCPError, match="backend catalog failed"):
                 await client.list_skills()
-
-
-async def test_catalog_refresh_replaces_ownership_and_old_records_expire(
-    tmp_path: Path,
-) -> None:
-    upstream = backend(tmp_path, "generation-0")
-    provider = ProxyProvider(lambda: ProxyClient(upstream, mode="auto"))
-    root = FastMCP("root", providers=[provider])
-    async with skills_client(root) as client:
-        for index in range(5):
-            name = f"generation-{index}"
-            if index:
-                (tmp_path / f"generation-{index - 1}").rename(tmp_path / name)
-                (tmp_path / name / "SKILL.md").write_text(
-                    f"---\nname: {name}\ndescription: Current generation.\n---\n\n# Current\n"
-                )
-            assert len(await client.list_skills()) == 1
-            source = provider._get_skills_source()
-            assert isinstance(source, _ProxySkillSource)
-            assert len(source._manifests) == 1
-        uri = "skill://generation-4/SKILL.md"
-        assert source._owns_skill_resource(uri)
-        for manifest in source._manifests.values():
-            manifest.timestamp -= provider._cache_ttl + 1
-        assert not source._owns_skill_resource(uri)
-        assert source._manifests == {}
-
-
-async def test_catalog_refresh_preserves_other_callers_ownership(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    partition: ContextVar[str] = ContextVar("partition", default="first")
-    monkeypatch.setattr("fastmcp.skills._proxy._get_auth_partition_key", partition.get)
-    upstream = backend(tmp_path, "review")
-    provider = ProxyProvider(lambda: ProxyClient(upstream, mode="auto"))
-    root = FastMCP("root", providers=[provider])
-    for owner in ["first", "second", "first"]:
-        token = partition.set(owner)
-        try:
-            async with skills_client(root) as client:
-                await client.list_skills()
-        finally:
-            partition.reset(token)
-    source = provider._get_skills_source()
-    assert isinstance(source, _ProxySkillSource)
-    assert {owner for owner, _ in source._manifests} == {"first", "second"}
 
 
 async def test_legacy_proxy_does_not_serve_skills_methods(tmp_path: Path) -> None:

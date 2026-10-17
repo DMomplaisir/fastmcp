@@ -8,15 +8,26 @@ import mcp_types
 from mcp.client.caching import CacheMode
 from mcp_types.version import MODERN_PROTOCOL_VERSIONS
 
-from fastmcp.skills import _client
+from fastmcp.client.telemetry import client_span
 from fastmcp.skills._constants import SKILLS_EXTENSION_ID
-from fastmcp.skills.models import GetSkillResult, ListSkillsResult, Skill
+from fastmcp.skills.models import (
+    GetSkillParams,
+    GetSkillRequest,
+    GetSkillResult,
+    ListSkillsParams,
+    ListSkillsRequest,
+    ListSkillsResult,
+    Skill,
+)
 from fastmcp.telemetry import inject_trace_context
+from fastmcp.utilities.logging import get_logger
 
 if TYPE_CHECKING:
     from fastmcp.client.client import Client
 
-AUTO_PAGINATION_MAX_PAGES = _client.AUTO_PAGINATION_MAX_PAGES
+logger = get_logger(__name__)
+
+AUTO_PAGINATION_MAX_PAGES = 250
 
 
 def _trace_meta() -> mcp_types.RequestParamsMeta | None:
@@ -67,9 +78,27 @@ class ClientSkillsMixin:
             MCPError: If the server rejects the request.
         """
         self._require_skills_extension()
-        return await _client.list_skills(
-            self, cursor=cursor, cache_mode=cache_mode, meta=_trace_meta()
-        )
+        with client_span(
+            "skills/list",
+            "skills/list",
+            "",
+            session_id=self.transport.get_session_id(),
+        ):
+
+            async def _send() -> ListSkillsResult:
+                request = ListSkillsRequest(
+                    params=ListSkillsParams(cursor=cursor, meta=_trace_meta())
+                )
+                return await self._await_with_session_monitoring(
+                    self.session.send_request(request, ListSkillsResult)
+                )
+
+            return await self._cached_fetch(
+                "skills/list",
+                cursor=cursor,
+                cache_mode=cache_mode,
+                send=_send,
+            )
 
     async def list_skills(
         self: Client,
@@ -90,15 +119,33 @@ class ClientSkillsMixin:
             RuntimeError: If Skills was not negotiated or the page limit is reached.
             MCPError: If the server rejects a request.
         """
-        self._require_skills_extension()
+        skills: list[Skill] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
 
-        async def fetch_page(cursor: str | None) -> ListSkillsResult:
-            return await self.list_skills_mcp(cursor=cursor, cache_mode=cache_mode)
+        for _ in range(max_pages):
+            result = await self.list_skills_mcp(cursor=cursor, cache_mode=cache_mode)
+            skills.extend(result.skills)
+            if not result.next_cursor:
+                break
+            if result.next_cursor in seen_cursors:
+                logger.warning(
+                    "[%s] Server returned duplicate pagination cursor %r for "
+                    "list_skills; stopping pagination",
+                    self.name,
+                    result.next_cursor,
+                )
+                break
+            seen_cursors.add(result.next_cursor)
+            cursor = result.next_cursor
+        else:
+            raise RuntimeError(
+                f"[{self.name}] Reached auto-pagination limit ({max_pages} pages) "
+                "for list_skills. Use list_skills_mcp() for manual pagination, "
+                "or increase max_pages."
+            )
 
-        result = await _client.list_all_skills(
-            fetch_page, name=self.name, max_pages=max_pages
-        )
-        return result.skills
+        return skills
 
     async def get_skill_mcp(
         self: Client,
@@ -120,9 +167,29 @@ class ClientSkillsMixin:
             MCPError: If the server rejects the request.
         """
         self._require_skills_extension()
-        return await _client.get_skill(
-            self, uri, cache_mode=cache_mode, meta=_trace_meta()
-        )
+        with client_span(
+            "skills/get",
+            "skills/get",
+            uri,
+            session_id=self.transport.get_session_id(),
+            resource_uri=uri,
+        ):
+
+            async def _send() -> GetSkillResult:
+                request = GetSkillRequest(
+                    params=GetSkillParams(uri=uri, meta=_trace_meta())
+                )
+                return await self._await_with_session_monitoring(
+                    self.session.send_request(request, GetSkillResult)
+                )
+
+            return await self._cached_fetch(
+                "skills/get",
+                cursor=None,
+                params_key=uri,
+                cache_mode=cache_mode,
+                send=_send,
+            )
 
     async def get_skill(
         self: Client,
