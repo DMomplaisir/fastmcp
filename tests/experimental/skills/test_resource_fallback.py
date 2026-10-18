@@ -62,7 +62,9 @@ async def test_invalid_skill_remains_an_ordinary_resource(
             assert actual == expected
         manifest = (await client.read_resource("skill://invalid/_manifest"))[0]
         assert isinstance(manifest, TextResourceContents)
-        assert json.loads(manifest.text) == {
+        manifest_data = json.loads(manifest.text)
+        manifest_data["files"].sort(key=lambda entry: entry["path"])
+        assert manifest_data == {
             "skill": "invalid",
             "files": [
                 {
@@ -70,7 +72,7 @@ async def test_invalid_skill_remains_an_ordinary_resource(
                     "size": len(data),
                     "hash": f"sha256:{hashlib.sha256(data).hexdigest()}",
                 }
-                for name, data in files.items()
+                for name, data in sorted(files.items())
             ],
         }
         assert [s.uri for s in await client.list_skills()] == ["skill://valid/SKILL.md"]
