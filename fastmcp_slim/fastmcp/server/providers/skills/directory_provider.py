@@ -18,7 +18,7 @@ from fastmcp.resources.base import Resource
 from fastmcp.resources.template import ResourceTemplate
 from fastmcp.server.dependencies import get_context
 from fastmcp.server.providers.aggregate import AggregateProvider
-from fastmcp.server.providers.skills._common import SkillInfo
+from fastmcp.server.providers.skills._common import SkillInfo, scan_skill_files
 from fastmcp.server.providers.skills.skill_provider import (
     SkillFileResource,
     SkillFileTemplate,
@@ -113,9 +113,11 @@ class SkillsDirectoryProvider(AggregateProvider):
                 continue
 
             for skill_dir in root.iterdir():
+                # Skill folders may be links to directories elsewhere; the skill's
+                # own files must still resolve within the folder it links to.
                 try:
-                    skill_dir = safe_join(root, skill_dir.name)
-                except (PathEscapeError, OSError, RuntimeError):
+                    skill_dir = skill_dir.resolve(strict=True)
+                except (OSError, RuntimeError):
                     logger.warning(
                         f"Skipping skill directory that cannot be used: {skill_dir.name}"
                     )
@@ -242,18 +244,16 @@ class SkillsDirectoryProvider(AggregateProvider):
     def _resource_provider(
         self, root: Path, name: str, relative: str | None = None
     ) -> SkillProvider:
-        if relative is None or relative == "_manifest":
-            provider = SkillProvider(root, supporting_files=self._supporting_files)
-            info = provider.skill_info
-            info.name = name
-            info.path = root
-            info.preserve_bytes = True
-            return provider
+        # Ordinary resources do not require valid skill frontmatter or UTF-8.
+        # Only listings and synthetic manifests need a complete file inventory.
         info = SkillInfo(
             name=name,
             description=f"Skill: {name}",
             path=root,
             main_file="SKILL.md",
+            files=scan_skill_files(root)
+            if relative is None or relative == "_manifest"
+            else [],
             preserve_bytes=True,
         )
         return SkillProvider(
